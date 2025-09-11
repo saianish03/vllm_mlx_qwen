@@ -1,5 +1,6 @@
 from math import inf
 import mlx.core as mx
+from numpy import reshape
 from .basics import softmax, linear
 
 
@@ -73,6 +74,40 @@ class SimpleMultiHeadAttention:
 def causal_mask(L: int, S: int, dtype: mx.Dtype) -> mx.array:
     pass
 
+import mlx.core as mx
+
+def reshape_for_gqa(x: mx.array, back: bool = False) -> mx.array:
+
+    ndim = len(x.shape)
+
+    if not back:  # forward: normalize to 5D
+        if ndim == 3:
+            H, L, D = x.shape
+            x = x.reshape(1, 1, H, L, D)
+        elif ndim == 4:
+            N, H, L, D = x.shape
+            x = x.reshape(1, N, H, L, D)
+        elif ndim == 5:
+            pass  # already in correct form
+        else:
+            raise ValueError(f"Unexpected shape {x.shape} for forward reshape")
+
+    else:  # backward: restore original shape
+        if ndim == 5:
+            b, N, H, L, D = x.shape
+            if b == 1 and N == 1:
+                x = x.reshape(H, L, D)       # back to 3D
+            elif b == 1:
+                x = x.reshape(N, H, L, D)    # back to 4D
+            else:
+                pass
+        elif ndim in (3, 4):
+            pass  # already restored
+        else:
+            raise ValueError(f"Unexpected shape {x.shape} for backward reshape")
+
+    return x
+
 
 def scaled_dot_product_attention_grouped(
     query: mx.array,
@@ -81,7 +116,39 @@ def scaled_dot_product_attention_grouped(
     scale: float | None = None,
     mask: mx.array | str | None = None,
 ) -> mx.array:
-    pass
+    # reshape query, key and value first and then do attention calculations
+    print("Key shape: ", key.shape)
+    print("Value shape: ", value.shape)
+    print("Query shape: ", query.shape)
+    print()
+
+    key = reshape_for_gqa(key)
+    query = reshape_for_gqa(query)
+    value = reshape_for_gqa(value)
+
+    if mask is not None:
+        if mask.dtype != mx.bool_:
+            mask = reshape_for_gqa(mask)
+
+    print("Key shape after: ", key.shape)
+    print("Value shape after: ", value.shape)
+    print("Query shape after: ", query.shape)
+    print()
+
+    _, N, Hq, L, D = query.shape # 0, 1, 2 ,3; -4, -3, -2, -1
+    _, _, H, S, _  =   key.shape # 0, 1, 2, 3; -4, -3, -2, -1
+    Hv = value.shape[-3]
+
+    key = mx.repeat(key, Hq//H, -3)
+    value = mx.repeat(value, Hq//H, -3)
+
+    print("Key shape after grouping: ", key.shape)
+    print("Value shape after grouping: ", value.shape)
+    print()
+
+    attn_result =  scaled_dot_product_attention_simple(query, key, value, scale, mask)
+
+    return reshape_for_gqa(attn_result, back = True)
 
 
 def flash_attention(
